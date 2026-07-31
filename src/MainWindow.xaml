@@ -1,0 +1,72 @@
+<Window x:Class="AlmanzilSouriPos.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="المنزل السوري - نظام نقطة البيع والتحكم الشامل POS" 
+        Height="800" Width="1300"
+        WindowStartupLocation="CenterScreen"
+        FlowDirection="RightToLeft"
+        Background="{StaticResource PrimaryDark}"
+        KeyDown="Window_KeyDown">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="65"/>
+            <RowDefinition Height="50"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Top Header Bar -->
+        <Border Grid.Row="0" Background="{StaticResource AccentRed}" Padding="15,10">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <TextBlock Text="🏪 المنزل السوري - نقطة البيع (POS)" FontSize="22" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    <TextBlock Text=" [وضع الأوفلاين التام]" FontSize="13" Foreground="#FFD1D1" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="🔄 مزامنة السيرفر" Background="{StaticResource AccentGold}" Foreground="{StaticResource PrimaryDark}" FontWeight="Bold" Padding="15,8" Margin="5,0" Click="Sync_Click"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Shortcuts Bar -->
+        <Border Grid.Row="1" Background="{StaticResource PanelDark}" Padding="10,5">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <Button Content="F1: بحث سريع" Margin="4,0" Padding="10,5" Background="{StaticResource CardDark}" Foreground="White" Click="Shortcut_F1_Click"/>
+                <Button Content="F2: تعليق الفاتورة" Margin="4,0" Padding="10,5" Background="{StaticResource CardDark}" Foreground="{StaticResource AccentGold}" Click="Shortcut_F2_Click"/>
+                <Button Content="F3: الفواتير المعلقة" Margin="4,0" Padding="10,5" Background="{StaticResource CardDark}" Foreground="{StaticResource AccentGold}" Click="Shortcut_F3_Click"/>
+                <Button Content="F5: كاش وإتمام" Margin="4,0" Padding="10,5" Background="{StaticResource AccentTeal}" Foreground="White" FontWeight="Bold" Click="Shortcut_F5_Click"/>
+                <Button Content="F6: طرق دفع أخرى" Margin="4,0" Padding="10,5" Background="#457B9D" Foreground="White" FontWeight="Bold" Click="Shortcut_F6_Click"/>
+                <Button Content="F12: شاشة المرتجعات" Margin="4,0" Padding="10,5" Background="{StaticResource AccentRed}" Foreground="White" FontWeight="Bold" Click="Shortcut_F12_Click"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Main Tab Control -->
+        <TabControl Grid.Row="2" Background="{StaticResource PrimaryDark}" BorderThickness="0" Foreground="White">
+            <TabItem Header="🛒 شاشة البيع (Sales)" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="SalesContainer"/>
+            </TabItem>
+            <TabItem Header="🔄 المرتجعات (Returns)" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="ReturnsContainer"/>
+            </TabItem>
+            <TabItem Header="📦 الأصناف والباركود" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="ProductsContainer"/>
+            </TabItem>
+            <TabItem Header="🚚 المشتريات والموردين" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="PurchasesContainer"/>
+            </TabItem>
+            <TabItem Header="👥 الموظفين والرواتب" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="HrContainer"/>
+            </TabItem>
+            <TabItem Header="💰 المصروفات والمسحوبات" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="ExpensesContainer"/>
+            </TabItem>
+            <TabItem Header="📊 تقارير الأرباح (Net Profit)" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="ReportsContainer"/>
+            </TabItem>
+            <TabItem Header="⚙️ الإعدادات والطباعة" FontSize="14" FontWeight="Bold">
+                <Grid x:Name="SettingsContainer"/>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>
