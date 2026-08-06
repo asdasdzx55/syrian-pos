@@ -55,7 +55,6 @@ class LocalDatabase:
                 )
             """)
 
-            # Ensure columns exist if table was created previously
             try: cursor.execute("ALTER TABLE products ADD COLUMN sub_category TEXT")
             except sqlite3.OperationalError: pass
 
@@ -95,6 +94,7 @@ class LocalDatabase:
                     customer_phone TEXT,
                     delivery_address TEXT,
                     cashier_id TEXT,
+                    shift_id TEXT,
                     sale_type TEXT DEFAULT 'in_store',
                     payment_method TEXT DEFAULT 'cash',
                     subtotal REAL DEFAULT 0.0,
@@ -107,6 +107,9 @@ class LocalDatabase:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            try: cursor.execute("ALTER TABLE invoices ADD COLUMN shift_id TEXT")
+            except sqlite3.OperationalError: pass
 
             # Invoice Items Table
             cursor.execute("""
@@ -183,6 +186,28 @@ class LocalDatabase:
                 )
             """)
 
+            # Shifts & Drawer Table (For X & Z Reports)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS shifts (
+                    id TEXT PRIMARY KEY,
+                    cashier_name TEXT DEFAULT 'كاشير المحل',
+                    start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    end_time TIMESTAMP,
+                    opening_cash REAL DEFAULT 0.0,
+                    expected_cash REAL DEFAULT 0.0,
+                    actual_cash REAL DEFAULT 0.0,
+                    cash_variance REAL DEFAULT 0.0,
+                    total_sales REAL DEFAULT 0.0,
+                    total_cash_sales REAL DEFAULT 0.0,
+                    total_card_sales REAL DEFAULT 0.0,
+                    total_instapay_sales REAL DEFAULT 0.0,
+                    total_vodafone_sales REAL DEFAULT 0.0,
+                    total_discounts REAL DEFAULT 0.0,
+                    invoice_count INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'open'
+                )
+            """)
+
             # Settings Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS settings (
@@ -215,7 +240,112 @@ class LocalDatabase:
                 for e in default_emps:
                     conn.execute("INSERT INTO employees (id, name, role, phone, base_salary) VALUES (?, ?, ?, ?, ?)", e)
 
+            # Ensure active shift exists
+            cnt_shift = conn.execute("SELECT COUNT(*) FROM shifts WHERE status = 'open'").fetchone()[0]
+            if cnt_shift == 0:
+                conn.execute(
+                    "INSERT INTO shifts (id, cashier_name, opening_cash, status) VALUES (?, 'أحمد الكاشير', 500.0, 'open')",
+                    (str(uuid.uuid4()),)
+                )
+
             conn.commit()
+
+    def get_active_shift(self):
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM shifts WHERE status = 'open' ORDER BY start_time DESC LIMIT 1").fetchone()
+            if row:
+                return dict(row)
+            # Create a new open shift
+            shift_id = str(uuid.uuid4())
+            conn.execute("INSERT INTO shifts (id, cashier_name, opening_cash, status) VALUES (?, 'كاشير المحل', 500.0, 'open')", (shift_id,))
+            conn.commit()
+            return dict(conn.execute("SELECT * FROM shifts WHERE id = ?", (shift_id,)).fetchone())
+
+    def get_shift_x_report(self):
+        shift = self.get_active_shift()
+        shift_id = shift["id"]
+        with self.get_connection() as conn:
+            invs = [dict(r) for r in conn.execute("SELECT * FROM invoices WHERE shift_id = ? AND status = 'completed'", (shift_id,)).fetchall()]
+            
+            # If no shift_id on old invoices, query invoices created after shift start_time
+            if not invs:
+                invs = [dict(r) for r in conn.execute("SELECT * FROM invoices WHERE created_at >= ? AND status = 'completed'", (shift["start_time"],)).fetchall()]
+
+            tot_sales = sum(float(i["net_total"]) for i in invs)
+            tot_disc = sum(float(i.get("discount", 0.0)) for i in invs)
+            cash_sales = sum(float(i["net_total"]) for i in invs if i.get("payment_method") in ("cash", "نقداً (كاش)", "نقداً (ج.م)"))
+            card_sales = sum(float(i["net_total"]) for i in invs if i.get("payment_method") in ("visa", "بطاقة فيزا / ماستر كارد"))
+            instapay_sales = sum(float(i["net_total"]) for i in invs if i.get("payment_method") in ("instapay", "انستا باي (InstaPay)"))
+            voda_sales = sum(float(i["net_total"]) for i in invs if i.get("payment_method") in ("vodafone_cash", "فودافون كاش (Vodafone Cash)"))
+            other_sales = tot_sales - (cash_sales + card_sales + instapay_sales + voda_sales)
+            if other_sales > 0 and cash_sales == 0: cash_sales += other_sales
+
+            opening_cash = float(shift.get("opening_cash", 500.0))
+            expected_cash = opening_cash + cash_sales
+
+            return {
+                "shift_id": shift_id,
+                "cashier_name": shift.get("cashier_name", "كاشير المحل"),
+                "start_time": shift["start_time"],
+                "opening_cash": opening_cash,
+                "total_sales": tot_sales,
+                "cash_sales": cash_sales,
+                "card_sales": card_sales,
+                "instapay_sales": instapay_sales,
+                "vodafone_sales": voda_sales,
+                "total_discounts": tot_disc,
+                "expected_cash": expected_cash,
+                "invoice_count": len(invs)
+            }
+
+    def close_shift_z_report(self, actual_cash, opening_cash_next=500.0, cashier_name="الكاشير"):
+        x_rep = self.get_shift_x_report()
+        shift_id = x_rep["shift_id"]
+        actual_cash = float(actual_cash)
+        variance = actual_cash - x_rep["expected_cash"]
+
+        with self.get_connection() as conn:
+            conn.execute("""
+                UPDATE shifts SET 
+                    end_time = CURRENT_TIMESTAMP,
+                    expected_cash = ?,
+                    actual_cash = ?,
+                    cash_variance = ?,
+                    total_sales = ?,
+                    total_cash_sales = ?,
+                    total_card_sales = ?,
+                    total_instapay_sales = ?,
+                    total_vodafone_sales = ?,
+                    total_discounts = ?,
+                    invoice_count = ?,
+                    status = 'closed'
+                WHERE id = ?
+            """, (
+                x_rep["expected_cash"], actual_cash, variance,
+                x_rep["total_sales"], x_rep["cash_sales"], x_rep["card_sales"],
+                x_rep["instapay_sales"], x_rep["vodafone_sales"], x_rep["total_discounts"],
+                x_rep["invoice_count"], shift_id
+            ))
+
+            # Open a fresh new shift
+            new_shift_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO shifts (id, cashier_name, opening_cash, status) VALUES (?, ?, ?, 'open')",
+                (new_shift_id, cashier_name, float(opening_cash_next))
+            )
+            conn.commit()
+
+        z_summary = dict(x_rep)
+        z_summary["actual_cash"] = actual_cash
+        z_summary["variance"] = variance
+        z_summary["end_time"] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        z_summary["next_opening_cash"] = opening_cash_next
+        return z_summary
+
+    def get_closed_shifts(self):
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM shifts WHERE status = 'closed' ORDER BY end_time DESC").fetchall()
+            return [dict(r) for r in rows]
 
     def get_customer_by_phone(self, phone):
         with self.get_connection() as conn:
@@ -391,17 +521,20 @@ class LocalDatabase:
 
     def save_invoice(self, invoice_data, items):
         inv_id = invoice_data.get("id") or str(uuid.uuid4())
+        active_shift = self.get_active_shift()
+        shift_id = active_shift["id"]
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO invoices (
                     id, invoice_number, customer_id, customer_name, customer_phone, delivery_address,
-                    cashier_id, sale_type, payment_method, subtotal, tax, discount, delivery_charge, net_total, status, is_synced, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+                    cashier_id, shift_id, sale_type, payment_method, subtotal, tax, discount, delivery_charge, net_total, status, is_synced, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
             """, (
                 inv_id, invoice_data["invoice_number"], invoice_data.get("customer_id"),
                 invoice_data.get("customer_name", "عميل نقدي"), invoice_data.get("customer_phone", ""),
-                invoice_data.get("delivery_address", ""), invoice_data.get("cashier_id"),
+                invoice_data.get("delivery_address", ""), invoice_data.get("cashier_id"), shift_id,
                 invoice_data.get("sale_type", "in_store"), invoice_data.get("payment_method", "cash"),
                 invoice_data["subtotal"], invoice_data.get("tax", 0.0), invoice_data.get("discount", 0.0),
                 invoice_data.get("delivery_charge", 0.0), invoice_data["net_total"],

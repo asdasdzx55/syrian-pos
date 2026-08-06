@@ -4,7 +4,7 @@ class ThermalPrinter80mm:
     """
     Xprinter 80mm ESC/POS Professional Thermal Receipt Generator for Al-Manzil Al-Souri Market.
     Width: 48 characters per line.
-    Supports dynamic store header, drawn table grid, and store settings from database.
+    Supports dynamic store header, drawn table grid, X & Z shift reports, and shelf barcode label printing.
     """
     LINE_WIDTH = 48
 
@@ -75,4 +75,70 @@ class ThermalPrinter80mm:
         lines.append("║ " + "أهلاً وسهلاً بكم دائماً!".center(44) + " ║")
         lines.append("╚" + "═" * 46 + "╝")
 
+        return "\n".join(lines)
+
+    def generate_x_report_text(self, x_data):
+        info = self.get_store_info()
+        lines = []
+        lines.append("╔" + "═" * 46 + "╗")
+        lines.append("║" + info["name"].center(46) + "║")
+        lines.append("║" + "🔍 [ تقرير X ] - تفتيش الوردية الحالية".center(46) + "║")
+        lines.append("╠" + "═" * 46 + "╣")
+        lines.append(f"║ الكاشير: {x_data['cashier_name']}".ljust(47) + "║")
+        lines.append(f"║ وقت بداية الوردية: {x_data['start_time']}".ljust(47) + "║")
+        lines.append(f"║ وقت المعاينة الحالي: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}".ljust(47) + "║")
+        lines.append("╠" + "─" * 46 + "╣")
+        lines.append(f"║ عدد الفواتير المنفذة: {x_data['invoice_count']} فاتورة".ljust(47) + "║")
+        lines.append(f"║ الرصيد الافتتاحي للدرج: {x_data['opening_cash']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ إجمالي مبيعات الكاش (نقداً): {x_data['cash_sales']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ إجمالي مبيعات البطاقات/فيزا: {x_data['card_sales']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ إجمالي مبيعات انستا باي: {x_data['instapay_sales']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ إجمالي مبيعات فودافون كاش: {x_data['vodafone_sales']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ إجمالي الخصومات الممنوحة: -{x_data['total_discounts']:.2f} ج.م".ljust(47) + "║")
+        lines.append("╠" + "═" * 46 + "╣")
+        lines.append(f"║ 💰 إجمالي مبيعات الوردية: {x_data['total_sales']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ 💵 النقدية المتوقعة حالياً بالدرج: {x_data['expected_cash']:.2f} ج.م".ljust(47) + "║")
+        lines.append("╚" + "═" * 46 + "╝")
+        return "\n".join(lines)
+
+    def generate_z_report_text(self, z_data):
+        info = self.get_store_info()
+        lines = []
+        lines.append("╔" + "═" * 46 + "╗")
+        lines.append("║" + info["name"].center(46) + "║")
+        lines.append("║" + "🔴 [ تقرير Z ] - إقفال وتصفير الوردية النهائي".center(46) + "║")
+        lines.append("╠" + "═" * 46 + "╣")
+        lines.append(f"║ الكاشير: {z_data['cashier_name']}".ljust(47) + "║")
+        lines.append(f"║ وقت بداية الوردية: {z_data['start_time']}".ljust(47) + "║")
+        lines.append(f"║ وقت الإقفال والتصفير: {z_data['end_time']}".ljust(47) + "║")
+        lines.append("╠" + "─" * 46 + "╣")
+        lines.append(f"║ عدد الفواتير الإجمالي: {z_data['invoice_count']} فاتورة".ljust(47) + "║")
+        lines.append(f"║ إجمالي المبيعات الكلية: {z_data['total_sales']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ النقدية الكاش بالدرج (متوقع): {z_data['expected_cash']:.2f} ج.م".ljust(47) + "║")
+        lines.append(f"║ النقدية الفعلية بعد العد: {z_data['actual_cash']:.2f} ج.م".ljust(47) + "║")
+
+        var = z_data['variance']
+        var_text = f"عجز بالدرج: {var:.2f} ج.م ⚠️" if var < 0 else f"زيادة بالدرج: +{var:.2f} ج.م 🎉" if var > 0 else "مطابقة تامة 100% 🎯"
+        lines.append(f"║ فروقات الدرج: {var_text}".ljust(47) + "║")
+        lines.append("╠" + "═" * 46 + "╣")
+        lines.append(f"║ 🌟 رصيد الدرج الافتتاحي للوردية القادمة: {z_data['next_opening_cash']:.2f} ج.م".ljust(47) + "║")
+        lines.append("║ " + "تم حسم وإقفال الوردية وتصفير المبيعات بنجاح!".center(44) + " ║")
+        lines.append("╚" + "═" * 46 + "╝")
+        return "\n".join(lines)
+
+    def generate_barcode_label_text(self, product_name, price, barcode, scale_code="", category=""):
+        info = self.get_store_info()
+        lines = []
+        lines.append("┌" + "─" * 38 + "┐")
+        lines.append("│" + info["name"].center(38) + "│")
+        lines.append("├" + "─" * 38 + "┤")
+        lines.append("│ " + f"{product_name[:26]:<26}".rjust(36) + " │")
+        if category:
+            lines.append("│ " + f"القسم: {category[:20]}".rjust(36) + " │")
+        if scale_code:
+            lines.append("│ " + f"كود الميزان الـ 5 أرقام: {scale_code}".rjust(36) + " │")
+        lines.append("├" + "─" * 38 + "┤")
+        lines.append("│ " + f"السعر: {price:.2f} ج.م (EGP)".center(36) + " │")
+        lines.append("│ " + f"|||| ||| ||||| {barcode or scale_code} |||| |||".center(36) + " │")
+        lines.append("└" + "─" * 38 + "┘")
         return "\n".join(lines)

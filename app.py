@@ -46,8 +46,8 @@ class MultiPagePosApp(ctk.CTk):
 
         self.title_label = ctk.CTkLabel(
             self.header_frame,
-            text="🏪 سوبرماركت المنزل السوري | نظام نقطة البيع والرواتب والموردين بالجنيه المصري (POS PC)",
-            font=("Cairo", 16, "bold"),
+            text="🏪 سوبرماركت المنزل السوري | نظام نقطة البيع والرواتب والموردين والورديات بالجنيه المصري (POS PC)",
+            font=("Cairo", 15, "bold"),
             text_color="#F8FAFC"
         )
         self.title_label.pack(side="right", padx=15, pady=6)
@@ -70,14 +70,16 @@ class MultiPagePosApp(ctk.CTk):
 
         self.pages_info = [
             ("sales", "🛒 شاشة البيع"),
-            ("purchases", "🚚 المشتريات والتوريد (بحث سريع) 📦"),
+            ("purchases", "🚚 المشتريات والتوريد 📦"),
             ("suppliers", "🤝 الموردين والحسابات"),
-            ("products", "📦 الأصناف والميزان 5 أرقام"),
-            ("hr", "👥 الموظفين والرواتب والسلف"),
+            ("products", "📦 الأصناف والميزان"),
+            ("shifts", "⏱️ الورديات والدرج X&Z"),
+            ("labels", "🏷️ ملصقات الباركود"),
+            ("hr", "👥 الموظفين والرواتب"),
             ("returns", "🔄 المرتجعات"),
             ("expenses", "💰 المصروفات"),
             ("reports", "📊 التقارير وصافي الربح"),
-            ("settings", "⚙️ إعدادات المحل والفاتورة"),
+            ("settings", "⚙️ الإعدادات والفاتورة"),
         ]
 
         self.nav_buttons = {}
@@ -85,7 +87,7 @@ class MultiPagePosApp(ctk.CTk):
             btn = ctk.CTkButton(
                 self.nav_bar,
                 text=page_title,
-                font=("Cairo", 11, "bold"),
+                font=("Cairo", 10, "bold"),
                 fg_color="#1E293B",
                 hover_color="#6366F1",
                 text_color="#94A3B8",
@@ -93,7 +95,7 @@ class MultiPagePosApp(ctk.CTk):
                 corner_radius=6,
                 command=lambda p=page_id: self.switch_page(p)
             )
-            btn.pack(side="right", padx=2, pady=4)
+            btn.pack(side="right", padx=1, pady=4)
             self.nav_buttons[page_id] = btn
 
         # 3. Main Content Area
@@ -124,6 +126,8 @@ class MultiPagePosApp(ctk.CTk):
         self.pages["purchases"] = PurchasesPage(self.content_container, self)
         self.pages["suppliers"] = SuppliersPage(self.content_container, self)
         self.pages["products"] = ProductsPage(self.content_container, self)
+        self.pages["shifts"] = ShiftsPage(self.content_container, self)
+        self.pages["labels"] = BarcodeLabelsPage(self.content_container, self)
         self.pages["hr"] = HrPage(self.content_container, self)
         self.pages["returns"] = ReturnsPage(self.content_container, self)
         self.pages["expenses"] = ExpensesPage(self.content_container, self)
@@ -1003,7 +1007,7 @@ class SuppliersPage(ctk.CTkFrame):
 
 
 # ==========================================
-# 4. PRODUCTS PAGE (كود الميزان الـ 5 أرقام)
+# 4. PRODUCTS PAGE
 # ==========================================
 class ProductsPage(ctk.CTkFrame):
     def __init__(self, parent, main_app):
@@ -1057,7 +1061,6 @@ class ProductsPage(ctk.CTkFrame):
         name_e = ctk.CTkEntry(win, placeholder_text="اسم المنتج (مثال: جبنة حلوم سورية 1كجم)", font=("Cairo", 11), justify="right")
         name_e.pack(padx=20, pady=4, fill="x")
 
-        # 5-Digit Scale Code Field
         scale_code_frame = ctk.CTkFrame(win, fg_color="#1E293B", corner_radius=8)
         scale_code_frame.pack(padx=20, pady=4, fill="x")
         ctk.CTkLabel(scale_code_frame, text="⚖️ كود الميزان الـ 5 أرقام (مثال: 01354 أو 13540):", font=("Cairo", 11, "bold"), text_color="#F59E0B").pack(side="right", padx=10, pady=6)
@@ -1131,7 +1134,262 @@ class ProductsPage(ctk.CTkFrame):
 
 
 # ==========================================
-# 5. HR PAGE
+# 5. SHIFTS & DRAWER PAGE (تقارير X & Z)
+# ==========================================
+class ShiftsPage(ctk.CTkFrame):
+    def __init__(self, parent, main_app):
+        super().__init__(parent, fg_color="#0F172A")
+        self.main_app = main_app
+        self.db = main_app.db
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=12)
+
+        ctk.CTkLabel(header, text="⏱️ إدارة ورديات الكاشير والدرج (تقارير X & Z)", font=("Cairo", 16, "bold"), text_color="#38BDF8").pack(side="right")
+
+        btn_box = ctk.CTkFrame(header, fg_color="transparent")
+        btn_box.pack(side="left")
+
+        ctk.CTkButton(btn_box, text="🔴 إقفال وتصفير الوردية (تقرير Z)", font=("Cairo", 11, "bold"), fg_color="#EF4444", command=self.close_shift_z_dialog).pack(side="left", padx=4)
+        ctk.CTkButton(btn_box, text="🔍 معاينة تقرير X (تفتيش الوردية)", font=("Cairo", 11, "bold"), fg_color="#0284C7", command=self.show_x_report_dialog).pack(side="left", padx=4)
+
+        # Active Shift Overview Cards
+        self.cards_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.cards_frame.pack(fill="x", padx=20, pady=8)
+
+        # History Table Container
+        self.history_box = ctk.CTkFrame(self, fg_color="#1E293B", corner_radius=10)
+        self.history_box.pack(fill="both", expand=True, padx=20, pady=10)
+
+        ctk.CTkLabel(self.history_box, text="📜 أرشيف الورديات المغلقة وتصفية الدرج السابقة:", font=("Cairo", 12, "bold"), text_color="#94A3B8").pack(pady=8, padx=12, anchor="e")
+
+        self.table_scroll = ctk.CTkScrollableFrame(self.history_box, fg_color="transparent")
+        self.table_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+    def on_show(self):
+        self.render_active_shift_cards()
+        self.render_history_table()
+
+    def render_active_shift_cards(self):
+        for c in self.cards_frame.winfo_children(): c.destroy()
+        x_rep = self.db.get_shift_x_report()
+
+        cards = [
+            ("👤 الكاشير والوردية الحالية", f"{x_rep['cashier_name']}\nمنذ: {x_rep['start_time'][:16]}", "#38BDF8"),
+            ("🧾 عدد الفواتير والمبيعات", f"{x_rep['invoice_count']} فاتورة | {x_rep['total_sales']:.2f} ج.م", "#10B981"),
+            ("💵 الكاش المتوقع حالياً بالدرج", f"{x_rep['expected_cash']:.2f} ج.م\n(افتتاحي: {x_rep['opening_cash']:.2f}ج)", "#F59E0B"),
+            ("💳 المبيعات الإلكترونية", f"فيزا: {x_rep['card_sales']:.0f}ج | InstaPay: {x_rep['instapay_sales']:.0f}ج", "#6366F1")
+        ]
+
+        for title, val, color in cards:
+            card = ctk.CTkFrame(self.cards_frame, fg_color="#1E293B", corner_radius=10, height=95)
+            card.pack(side="right", expand=True, fill="both", padx=4)
+
+            ctk.CTkLabel(card, text=title, font=("Cairo", 10, "bold"), text_color="#94A3B8").pack(pady=(8, 2))
+            ctk.CTkLabel(card, text=val, font=("Cairo", 12, "bold"), text_color=color, justify="center").pack(pady=(0, 8))
+
+    def show_x_report_dialog(self):
+        x_rep = self.db.get_shift_x_report()
+        x_text = self.main_app.printer.generate_x_report_text(x_rep)
+
+        win = ctk.CTkToplevel(self)
+        win.title("🔍 معاينة تقرير X (تفتيش الوردية الحالية بدون تصفير)")
+        win.geometry("520x650")
+        win.configure(fg_color="#0F172A")
+        win.grab_set()
+
+        ctk.CTkLabel(win, text="🔍 تقرير X الحراري 80mm لتفتيش الدرج والوردية الحالية", font=("Cairo", 13, "bold"), text_color="#0284C7").pack(pady=10)
+
+        text_box = tk.Text(win, font=("Courier New", 10, "bold"), bg="#FFFDF9", fg="#000000", wrap="word", relief="flat")
+        text_box.pack(fill="both", expand=True, padx=15, pady=5)
+        text_box.insert("1.0", x_text)
+        text_box.configure(state="disabled")
+
+        ctk.CTkButton(
+            win, text="🖨️ طباعة تقرير X الحراري فورياً", font=("Cairo", 12, "bold"),
+            fg_color="#0284C7", hover_color="#0369A1", height=40, command=lambda: [messagebox.showinfo("الطباعة", "تم إرسال تقرير X للطابعة الحرارية بنجاح!"), win.destroy()]
+        ).pack(padx=15, pady=12, fill="x")
+
+    def close_shift_z_dialog(self):
+        x_rep = self.db.get_shift_x_report()
+
+        win = ctk.CTkToplevel(self)
+        win.title("🔴 إقفال الوردية وتصفير الدرج (تقرير Z)")
+        win.geometry("480x420")
+        win.configure(fg_color="#0F172A")
+        win.grab_set()
+
+        ctk.CTkLabel(win, text="🔴 إقفال الوردية وتصفير الدرج (تقرير Z):", font=("Cairo", 14, "bold"), text_color="#EF4444").pack(pady=10)
+
+        info_lbl = ctk.CTkLabel(
+            win,
+            text=f"الكاشير: {x_rep['cashier_name']}\nإجمالي النقدية (الكاش) المتوقعة بالدرج: {x_rep['expected_cash']:.2f} ج.م",
+            font=("Cairo", 12, "bold"), text_color="#F59E0B"
+        )
+        info_lbl.pack(pady=5)
+
+        cash_e = ctk.CTkEntry(win, placeholder_text="أدخل النقدية الكاش الفعلية في الدرج بعد العد (ج.م)", font=("Cairo", 12, "bold"), justify="center", fg_color="#1E293B", height=38)
+        cash_e.pack(padx=25, pady=10, fill="x")
+        cash_e.focus_set()
+
+        next_cash_e = ctk.CTkEntry(win, placeholder_text="الرصيد الافتراضي للوردية القادمة (افتراضي 500 ج.م)", font=("Cairo", 11), justify="center", fg_color="#1E293B", height=34)
+        next_cash_e.insert(0, "500")
+        next_cash_e.pack(padx=25, pady=5, fill="x")
+
+        def confirm_z_close():
+            try: actual_cash = float(cash_e.get().strip())
+            except ValueError: return messagebox.showerror("خطأ", "يرجى كتابة المبلغ النظير للعد بشكل صحيح!")
+
+            try: next_float = float(next_cash_e.get().strip() or "500")
+            except ValueError: next_float = 500.0
+
+            z_res = self.db.close_shift_z_report(actual_cash, next_float, x_rep['cashier_name'])
+            z_text = self.main_app.printer.generate_z_report_text(z_res)
+
+            win.destroy()
+
+            # Show Z Report Window
+            z_win = ctk.CTkToplevel(self)
+            z_win.title("🔴 تقرير Z - إقفال الوردية والتصفير النهائي")
+            z_win.geometry("520x660")
+            z_win.configure(fg_color="#0F172A")
+            z_win.grab_set()
+
+            ctk.CTkLabel(z_win, text="🔴 تقرير Z الحراري 80mm - تم إقفال الوردية وتصفير الدرج بنجاح!", font=("Cairo", 12, "bold"), text_color="#EF4444").pack(pady=10)
+
+            t_box = tk.Text(z_win, font=("Courier New", 10, "bold"), bg="#FFFDF9", fg="#000000", wrap="word", relief="flat")
+            t_box.pack(fill="both", expand=True, padx=15, pady=5)
+            t_box.insert("1.0", z_text)
+            t_box.configure(state="disabled")
+
+            ctk.CTkButton(
+                z_win, text="🖨️ طباعة تقرير Z وإغلاق 🔴", font=("Cairo", 12, "bold"),
+                fg_color="#EF4444", hover_color="#DC2626", height=40, command=lambda: [messagebox.showinfo("الطباعة", "تم إرسال تقرير Z للطابعة الحرارية بنجاح!"), z_win.destroy()]
+            ).pack(padx=15, pady=12, fill="x")
+
+            self.on_show()
+
+        ctk.CTkButton(win, text="تأكيد حسم وتصفير الوردية 🔴", font=("Cairo", 13, "bold"), fg_color="#EF4444", height=40, command=confirm_z_close).pack(padx=25, pady=15, fill="x")
+
+    def render_history_table(self):
+        for c in self.table_scroll.winfo_children(): c.destroy()
+        closed_shifts = self.db.get_closed_shifts()
+
+        h = ctk.CTkFrame(self.table_scroll, fg_color="#0F172A", height=36)
+        h.pack(fill="x", pady=2)
+        cols = ["الكاشير", "تاريخ الإقفال", "عدد الفواتير", "إجمالي المبيعات", "المتوقع بالدرج", "الفعلي بعد العد", "فروقات الدرج (عجز/زيادة)"]
+        for c in cols:
+            ctk.CTkLabel(h, text=c, font=("Cairo", 10, "bold"), text_color="#94A3B8").pack(side="right", expand=True, fill="x")
+
+        for s in closed_shifts:
+            row = ctk.CTkFrame(self.table_scroll, fg_color="#334155", height=38)
+            row.pack(fill="x", pady=2)
+
+            ctk.CTkLabel(row, text=s["cashier_name"], font=("Cairo", 11, "bold")).pack(side="right", expand=True, fill="x")
+            ctk.CTkLabel(row, text=str(s.get("end_time", "-"))[:16], font=("Cairo", 10)).pack(side="right", expand=True, fill="x")
+            ctk.CTkLabel(row, text=str(s.get("invoice_count", 0)), font=("Cairo", 10)).pack(side="right", expand=True, fill="x")
+            ctk.CTkLabel(row, text=f"{s['total_sales']:.2f} ج.م", font=("Cairo", 11, "bold"), text_color="#10B981").pack(side="right", expand=True, fill="x")
+            ctk.CTkLabel(row, text=f"{s['expected_cash']:.2f} ج.م", font=("Cairo", 10)).pack(side="right", expand=True, fill="x")
+            ctk.CTkLabel(row, text=f"{s['actual_cash']:.2f} ج.م", font=("Cairo", 10)).pack(side="right", expand=True, fill="x")
+
+            v = float(s.get("cash_variance", 0.0))
+            v_col = "#EF4444" if v < 0 else "#10B981" if v > 0 else "#38BDF8"
+            v_txt = f"{v:.2f} ج.م" if v != 0 else "مطابق 🎯"
+            ctk.CTkLabel(row, text=v_txt, font=("Cairo", 11, "bold"), text_color=v_col).pack(side="right", expand=True, fill="x")
+
+
+# ==========================================
+# 6. BARCODE & SHELF LABELS PAGE (طباعة ملصقات الباركود والأسعار)
+# ==========================================
+class BarcodeLabelsPage(ctk.CTkFrame):
+    def __init__(self, parent, main_app):
+        super().__init__(parent, fg_color="#0F172A")
+        self.main_app = main_app
+        self.db = main_app.db
+        self.selected_product = None
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=12)
+
+        ctk.CTkLabel(header, text="🏷️ طباعة ملصقات الرفوف والباركود والأسعار (Barcode & Shelf Labels)", font=("Cairo", 16, "bold"), text_color="#F59E0B").pack(side="right")
+
+        # Selection Bar
+        sel_bar = ctk.CTkFrame(self, fg_color="#1E293B", corner_radius=10)
+        sel_bar.pack(fill="x", padx=20, pady=10)
+
+        ctk.CTkLabel(sel_bar, text="اختر الصنف المراد طباعة ملصقات له:", font=("Cairo", 12, "bold"), text_color="#94A3B8").pack(side="right", padx=12, pady=12)
+
+        self.search_e = ctk.CTkEntry(sel_bar, placeholder_text="ابحث باسم المنتج أو كود الميزان...", font=("Cairo", 11), justify="right", width=250, fg_color="#0F172A")
+        self.search_e.pack(side="right", padx=8, pady=12)
+        self.search_e.bind("<KeyRelease>", lambda e: self.search_product())
+
+        self.count_e = ctk.CTkEntry(sel_bar, placeholder_text="عدد الملصقات", font=("Cairo", 11, "bold"), justify="center", width=100, fg_color="#0F172A")
+        self.count_e.insert(0, "10")
+        self.count_e.pack(side="left", padx=12, pady=12)
+        ctk.CTkLabel(sel_bar, text="عدد النسخ:", font=("Cairo", 11, "bold"), text_color="#F59E0B").pack(side="left", padx=4, pady=12)
+
+        # Label Preview Canvas
+        self.preview_card = ctk.CTkFrame(self, fg_color="#FFFDF5", border_color="#D97706", border_width=3, corner_radius=12, width=420, height=260)
+        self.preview_card.pack(padx=20, pady=15)
+
+        self.btn_print = ctk.CTkButton(
+            self, text="🖨️ طباعة ملصقات الباركود والأسعار الآن", font=("Cairo", 13, "bold"),
+            fg_color="#10B981", hover_color="#059669", height=42, command=self.print_labels
+        )
+        self.btn_print.pack(padx=20, pady=10, fill="x")
+
+    def on_show(self):
+        prods = self.db.get_products()
+        if prods:
+            self.selected_product = prods[0]
+            self.render_label_preview()
+
+    def search_product(self):
+        q = self.search_e.get().strip()
+        prods = self.db.get_products(q)
+        if prods:
+            self.selected_product = prods[0]
+            self.render_label_preview()
+
+    def render_label_preview(self):
+        for c in self.preview_card.winfo_children(): c.destroy()
+        if not self.selected_product: return
+
+        p = self.selected_product
+        info = self.main_app.printer.get_store_info()
+
+        ctk.CTkLabel(self.preview_card, text=f"🏷️ {info['name']}", font=("Cairo", 14, "bold"), text_color="#78350F").pack(pady=(12, 2))
+        ctk.CTkLabel(self.preview_card, text=p["name"][:30], font=("Cairo", 16, "bold"), text_color="#0F172A").pack(pady=2)
+
+        if p.get("category_id"):
+            ctk.CTkLabel(self.preview_card, text=f"القسم: {p.get('category_id')} | {p.get('sub_category', '')}", font=("Cairo", 10), text_color="#78350F").pack(pady=1)
+
+        code_txt = p.get("scale_code") or p.get("piece_barcode") or "01354"
+        ctk.CTkLabel(self.preview_card, text=f"كود الميزان/الباركود: {code_txt}", font=("Cairo", 11, "bold"), text_color="#0284C7").pack(pady=1)
+
+        price_box = ctk.CTkFrame(self.preview_card, fg_color="#FEF3C7", corner_radius=8)
+        price_box.pack(padx=20, pady=6, fill="x")
+        ctk.CTkLabel(price_box, text=f"السعر: {p['piece_price']:.2f} ج.م", font=("Cairo", 20, "bold"), text_color="#B45309").pack(pady=4)
+
+        bc_canvas = tk.Canvas(self.preview_card, bg="#FFFDF5", height=36, highlightthickness=0)
+        bc_canvas.pack(fill="x", padx=30, pady=(2, 10))
+        for i in range(10, 320, 5):
+            w = 2 if i % 10 == 0 else 3 if i % 15 == 0 else 1
+            bc_canvas.create_line(i, 2, i, 30, width=w, fill="#000000")
+
+    def print_labels(self):
+        if not self.selected_product: return
+        count = self.count_e.get().strip() or "10"
+        p = self.selected_product
+        lbl_text = self.main_app.printer.generate_barcode_label_text(
+            p["name"], p["piece_price"], p.get("piece_barcode", ""), p.get("scale_code", ""), p.get("category_id", "")
+        )
+
+        messagebox.showinfo("نجاح الطباعة", f"تم إرسال {count} ملصق باركود ورف للصنف '{p['name']}' إلى طابعة الملصقات والباركود بنجاح! 🖨️🏷️")
+
+
+# ==========================================
+# 7. HR PAGE
 # ==========================================
 class HrPage(ctk.CTkFrame):
     def __init__(self, parent, main_app):
@@ -1306,7 +1564,7 @@ class HrPage(ctk.CTkFrame):
 
 
 # ==========================================
-# 6. RETURNS PAGE
+# 8. RETURNS PAGE
 # ==========================================
 class ReturnsPage(ctk.CTkFrame):
     def __init__(self, parent, main_app):
@@ -1347,7 +1605,7 @@ class ReturnsPage(ctk.CTkFrame):
 
 
 # ==========================================
-# 7. EXPENSES PAGE
+# 9. EXPENSES PAGE
 # ==========================================
 class ExpensesPage(ctk.CTkFrame):
     def __init__(self, parent, main_app):
@@ -1418,7 +1676,7 @@ class ExpensesPage(ctk.CTkFrame):
 
 
 # ==========================================
-# 8. REPORTS PAGE
+# 10. REPORTS PAGE
 # ==========================================
 class ReportsPage(ctk.CTkFrame):
     def __init__(self, parent, main_app):
@@ -1451,7 +1709,7 @@ class ReportsPage(ctk.CTkFrame):
 
 
 # ==========================================
-# 9. SETTINGS PAGE
+# 11. SETTINGS PAGE
 # ==========================================
 class SettingsPage(ctk.CTkFrame):
     def __init__(self, parent, main_app):
