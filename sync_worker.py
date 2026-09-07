@@ -22,33 +22,83 @@ class BackgroundSyncWorker:
 
     def sync_now(self):
         branch_id = self.db.get_setting("branch_id", "019fb393-1be4-73a6-aa70-4f289830078a")
-        
-        # 1. Push Pending Invoices
-        pending = self.db.get_pending_invoices()
-        if pending:
-            success, synced_ids = self.api.sync_invoices(branch_id, pending)
-            if success and synced_ids:
-                self.db.mark_invoices_synced(synced_ids)
-                print(f"[Sync Worker] Successfully pushed {len(synced_ids)} offline invoices to central server.")
+        sync_report = {}
 
-        # 2. Pull Latest Central Catalog & Stock
-        success, data = self.api.fetch_initial_data(branch_id)
-        if success and data:
-            categories = data.get("categories", [])
-            products = data.get("products", [])
-            stocks = data.get("stocks", [])
-            customers = data.get("customers", [])
-            if categories or products:
-                self.db.sync_catalog(categories, products, stocks, customers)
-                print("[Sync Worker] Successfully pulled central catalog & stock updates.")
+        # 1. Push Pending Sales / Invoices (action=push_sale)
+        try:
+            pending = self.db.get_pending_invoices()
+            if pending:
+                success, synced_ids = self.api.sync_invoices(branch_id, pending, db=self.db)
+                sync_report["sales_pushed"] = len(synced_ids)
+                if synced_ids:
+                    print(f"[Sync Worker] Pushed {len(synced_ids)} sales invoices to cloud.")
+        except Exception as e:
+            print(f"[Sync Worker] Sales sync error: {e}")
 
-        # 3. Synchronize Expenses Bi-Directionally (Local POS <-> Cloud Web)
+        # 2. Synchronize Expenses Bi-Directionally (action=record_expense & get_pos_reports)
         try:
             exp_success, exp_res = self.api.sync_expenses(self.db)
-            if exp_success and (exp_res.get("pushed", 0) > 0 or exp_res.get("pulled", 0) > 0):
-                print(f"[Sync Worker] Expenses Synced: Pushed {exp_res.get('pushed')}, Pulled {exp_res.get('pulled')}")
+            if exp_success:
+                sync_report["expenses"] = exp_res
+                if exp_res.get("pushed", 0) > 0 or exp_res.get("pulled", 0) > 0:
+                    print(f"[Sync Worker] Expenses Synced: Pushed {exp_res.get('pushed')}, Pulled {exp_res.get('pulled')}")
         except Exception as e:
             print(f"[Sync Worker] Expense sync note: {e}")
+
+        # 3. Synchronize Purchases (action=push_purchase & get_purchases)
+        try:
+            pur_success, pur_res = self.api.sync_purchases(self.db)
+            if pur_success:
+                sync_report["purchases"] = pur_res
+                if pur_res.get("pushed", 0) > 0 or pur_res.get("pulled", 0) > 0:
+                    print(f"[Sync Worker] Purchases Synced: Pushed {pur_res.get('pushed')}, Pulled {pur_res.get('pulled')}")
+        except Exception as e:
+            print(f"[Sync Worker] Purchases sync error: {e}")
+
+        # 4. Synchronize Customers (action=save_customer & get_customers)
+        try:
+            cust_success, cust_res = self.api.sync_customers(self.db)
+            if cust_success:
+                sync_report["customers"] = cust_res
+                if cust_res.get("pushed", 0) > 0 or cust_res.get("pulled", 0) > 0:
+                    print(f"[Sync Worker] Customers Synced: Pushed {cust_res.get('pushed')}, Pulled {cust_res.get('pulled')}")
+        except Exception as e:
+            print(f"[Sync Worker] Customers sync error: {e}")
+
+        # 5. Synchronize Suppliers (action=sync_supplier & get_suppliers)
+        try:
+            supp_success, supp_res = self.api.sync_suppliers(self.db)
+            if supp_success:
+                sync_report["suppliers"] = supp_res
+                if supp_res.get("pushed", 0) > 0 or supp_res.get("pulled", 0) > 0:
+                    print(f"[Sync Worker] Suppliers Synced: Pushed {supp_res.get('pushed')}, Pulled {supp_res.get('pulled')}")
+        except Exception as e:
+            print(f"[Sync Worker] Suppliers sync error: {e}")
+
+        # 6. Pull Latest Central Catalog & Stock (action=get_products & get_categories)
+        try:
+            success, data = self.api.fetch_initial_data(branch_id)
+            if success and data:
+                categories = data.get("categories", [])
+                products = data.get("products", [])
+                stocks = data.get("stocks", [])
+                customers = data.get("customers", [])
+                if categories or products:
+                    self.db.sync_catalog(categories, products, stocks, customers)
+                    sync_report["catalog_updated"] = True
+                    print("[Sync Worker] Pulled central catalog updates.")
+        except Exception as e:
+            print(f"[Sync Worker] Catalog pull error: {e}")
+
+        # 7. Check Web Orders (action=get_orders)
+        try:
+            success_orders, web_orders = self.api.fetch_cloud_orders(limit=20)
+            if success_orders and isinstance(web_orders, list):
+                sync_report["web_orders_count"] = len(web_orders)
+        except Exception as e:
+            print(f"[Sync Worker] Web orders check error: {e}")
+
+        return sync_report
 
     def _run_loop(self):
         while self.running:

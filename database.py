@@ -148,7 +148,58 @@ class LocalDatabase:
                     company TEXT,
                     phone TEXT,
                     address TEXT,
-                    current_balance REAL DEFAULT 0.0
+                    current_balance REAL DEFAULT 0.0,
+                    is_synced INTEGER DEFAULT 0,
+                    cloud_id TEXT DEFAULT NULL
+                )
+            """)
+
+            try: cursor.execute("ALTER TABLE customers ADD COLUMN is_synced INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE customers ADD COLUMN cloud_id TEXT DEFAULT NULL")
+            except sqlite3.OperationalError: pass
+
+            try: cursor.execute("ALTER TABLE suppliers ADD COLUMN is_synced INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
+            try: cursor.execute("ALTER TABLE suppliers ADD COLUMN cloud_id TEXT DEFAULT NULL")
+            except sqlite3.OperationalError: pass
+
+            try: cursor.execute("ALTER TABLE invoices ADD COLUMN cloud_id TEXT DEFAULT NULL")
+            except sqlite3.OperationalError: pass
+
+            # Purchases Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS purchases (
+                    id TEXT PRIMARY KEY,
+                    invoice_number TEXT NOT NULL,
+                    supplier_id TEXT,
+                    supplier_name TEXT,
+                    is_credit INTEGER DEFAULT 0,
+                    total_amount REAL DEFAULT 0.0,
+                    paid_amount REAL DEFAULT 0.0,
+                    discount REAL DEFAULT 0.0,
+                    payment_method TEXT DEFAULT 'نقدي',
+                    status TEXT DEFAULT 'مكتملة',
+                    is_synced INTEGER DEFAULT 0,
+                    cloud_id TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Purchase Items Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS purchase_items (
+                    id TEXT PRIMARY KEY,
+                    purchase_id TEXT NOT NULL,
+                    product_id TEXT,
+                    barcode TEXT,
+                    name TEXT,
+                    piece_qty REAL DEFAULT 1.0,
+                    bonus_qty REAL DEFAULT 0.0,
+                    buy_price REAL DEFAULT 0.0,
+                    sell_price REAL DEFAULT 0.0,
+                    total_cost REAL DEFAULT 0.0,
+                    FOREIGN KEY (purchase_id) REFERENCES purchases(id)
                 )
             """)
 
@@ -384,12 +435,54 @@ class LocalDatabase:
     def save_customer(self, name, phone, address=""):
         cust_id = str(uuid.uuid4())
         with self.get_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO customers (id, name, phone, address) VALUES (?, ?, ?, ?)",
-                (cust_id, name, phone, address)
-            )
+            existing = conn.execute("SELECT id FROM customers WHERE phone = ?", (phone.strip(),)).fetchone()
+            if existing:
+                cust_id = existing["id"]
+                conn.execute(
+                    "UPDATE customers SET name = ?, address = ?, is_synced = 0 WHERE id = ?",
+                    (name.strip(), address.strip(), cust_id)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO customers (id, name, phone, address, is_synced) VALUES (?, ?, ?, ?, 0)",
+                    (cust_id, name.strip(), phone.strip(), address.strip())
+                )
             conn.commit()
             return cust_id
+
+    def get_unsynced_customers(self):
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM customers WHERE is_synced = 0").fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_customers_synced(self, customer_ids):
+        with self.get_connection() as conn:
+            for c_id in customer_ids:
+                conn.execute("UPDATE customers SET is_synced = 1 WHERE id = ?", (c_id,))
+            conn.commit()
+
+    def sync_cloud_customers(self, cloud_customers):
+        with self.get_connection() as conn:
+            synced_count = 0
+            for c in cloud_customers:
+                c_id = str(c.get("id", ""))
+                c_name = c.get("name", "").strip()
+                c_phone = c.get("phone", "").strip()
+                c_addr = c.get("address", "") or ""
+                if not c_name or not c_phone:
+                    continue
+                existing = conn.execute("SELECT id FROM customers WHERE phone = ? OR cloud_id = ?", (c_phone, c_id)).fetchone()
+                if existing:
+                    conn.execute("UPDATE customers SET name = ?, address = ?, cloud_id = ?, is_synced = 1 WHERE id = ?", (c_name, c_addr, c_id, existing["id"]))
+                else:
+                    new_id = str(uuid.uuid4())
+                    conn.execute(
+                        "INSERT INTO customers (id, name, phone, address, points, balance, is_synced, cloud_id) VALUES (?, ?, ?, ?, 0, 0, 1, ?)",
+                        (new_id, c_name, c_phone, c_addr, c_id)
+                    )
+                    synced_count += 1
+            conn.commit()
+            return synced_count
 
     def set_setting(self, key, value):
         with self.get_connection() as conn:
@@ -410,11 +503,45 @@ class LocalDatabase:
         supp_id = "supp-" + str(uuid.uuid4())[:8]
         with self.get_connection() as conn:
             conn.execute(
-                "INSERT INTO suppliers (id, name, company, phone, address, current_balance) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO suppliers (id, name, company, phone, address, current_balance, is_synced) VALUES (?, ?, ?, ?, ?, ?, 0)",
                 (supp_id, name, company, phone, address, float(initial_balance))
             )
             conn.commit()
             return supp_id
+
+    def get_unsynced_suppliers(self):
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM suppliers WHERE is_synced = 0").fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_suppliers_synced(self, supplier_ids):
+        with self.get_connection() as conn:
+            for s_id in supplier_ids:
+                conn.execute("UPDATE suppliers SET is_synced = 1 WHERE id = ?", (s_id,))
+            conn.commit()
+
+    def sync_cloud_suppliers(self, cloud_suppliers):
+        with self.get_connection() as conn:
+            synced_count = 0
+            for s in cloud_suppliers:
+                s_id = str(s.get("id", ""))
+                s_name = s.get("name", "").strip()
+                s_phone = s.get("phone", "") or ""
+                s_bal = float(s.get("balance", 0.0))
+                if not s_name:
+                    continue
+                existing = conn.execute("SELECT id FROM suppliers WHERE name = ? OR cloud_id = ?", (s_name, s_id)).fetchone()
+                if existing:
+                    conn.execute("UPDATE suppliers SET phone = ?, current_balance = ?, cloud_id = ?, is_synced = 1 WHERE id = ?", (s_phone, s_bal, s_id, existing["id"]))
+                else:
+                    new_id = "supp-" + str(uuid.uuid4())[:8]
+                    conn.execute(
+                        "INSERT INTO suppliers (id, name, phone, current_balance, is_synced, cloud_id) VALUES (?, ?, ?, ?, 1, ?)",
+                        (new_id, s_name, s_phone, s_bal, s_id)
+                    )
+                    synced_count += 1
+            conn.commit()
+            return synced_count
 
     def update_supplier_balance(self, supplier_id, delta_amount):
         with self.get_connection() as conn:
@@ -596,16 +723,55 @@ class LocalDatabase:
     def save_purchase_invoice(self, supplier_id, invoice_number, is_credit, total_amount, items):
         with self.get_connection() as conn:
             cursor = conn.cursor()
+
+            # Get supplier name if exists
+            supp_name = "مورد عام"
+            if supplier_id:
+                s_row = cursor.execute("SELECT name FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+                if s_row:
+                    supp_name = s_row["name"]
+
+            pur_id = str(uuid.uuid4())
+            payment_method = "آجل" if is_credit else "نقدي"
+            paid_amount = 0.0 if is_credit else float(total_amount)
+
+            cursor.execute("""
+                INSERT INTO purchases (
+                    id, invoice_number, supplier_id, supplier_name, is_credit, total_amount, paid_amount, payment_method, status, is_synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'مكتملة', 0)
+            """, (pur_id, invoice_number, supplier_id, supp_name, 1 if is_credit else 0, float(total_amount), paid_amount, payment_method))
+
             for item in items:
                 prod_id = item["product_id"]
-                add_qty = float(item["piece_qty"]) + float(item.get("bonus_qty", 0))
+                p_qty = float(item.get("piece_qty", 1.0))
+                b_qty = float(item.get("bonus_qty", 0.0))
+                total_item_qty = p_qty + b_qty
+                buy_price = float(item.get("buy_price", 0.0))
+                sell_price = float(item.get("sell_price", 0.0))
+                p_name = item.get("name", "")
+
+                prod_row = cursor.execute("SELECT name, piece_barcode FROM products WHERE id = ?", (prod_id,)).fetchone()
+                p_bc = ""
+                if prod_row:
+                    if not p_name:
+                        p_name = prod_row["name"]
+                    p_bc = prod_row["piece_barcode"] or ""
+
+                cursor.execute("""
+                    INSERT INTO purchase_items (
+                        id, purchase_id, product_id, barcode, name, piece_qty, bonus_qty, buy_price, sell_price, total_cost
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    str(uuid.uuid4()), pur_id, prod_id, p_bc, p_name, p_qty, b_qty, buy_price, sell_price, (p_qty * buy_price)
+                ))
+
                 cursor.execute("""
                     INSERT OR REPLACE INTO stock (product_id, quantity_pieces)
                     VALUES (?, COALESCE((SELECT quantity_pieces FROM stock WHERE product_id = ?), 0) + ?)
-                """, (prod_id, prod_id, add_qty))
+                """, (prod_id, prod_id, total_item_qty))
 
-                if item.get("buy_price") and float(item["buy_price"]) > 0:
-                    cursor.execute("UPDATE products SET piece_cost = ? WHERE id = ?", (float(item["buy_price"]), prod_id))
+                if buy_price > 0:
+                    cursor.execute("UPDATE products SET piece_cost = ? WHERE id = ?", (buy_price, prod_id))
 
             if is_credit and supplier_id:
                 cursor.execute(
@@ -618,6 +784,42 @@ class LocalDatabase:
                 )
 
             conn.commit()
+            return pur_id
+
+    def get_unsynced_purchases(self):
+        with self.get_connection() as conn:
+            purchases = [dict(r) for r in conn.execute("SELECT * FROM purchases WHERE is_synced = 0").fetchall()]
+            for pur in purchases:
+                items = [dict(r) for r in conn.execute("SELECT * FROM purchase_items WHERE purchase_id = ?", (pur["id"],)).fetchall()]
+                pur["items"] = items
+            return purchases
+
+    def mark_purchases_synced(self, purchase_ids):
+        with self.get_connection() as conn:
+            for pid in purchase_ids:
+                conn.execute("UPDATE purchases SET is_synced = 1 WHERE id = ?", (pid,))
+            conn.commit()
+
+    def sync_cloud_purchases(self, cloud_purchases):
+        with self.get_connection() as conn:
+            synced_count = 0
+            for pur in cloud_purchases:
+                c_id = str(pur.get("id", ""))
+                inv_num = pur.get("invoice_number") or f"INV-{c_id}"
+                existing = conn.execute("SELECT id FROM purchases WHERE cloud_id = ? OR invoice_number = ?", (c_id, inv_num)).fetchone()
+                if not existing:
+                    new_id = str(uuid.uuid4())
+                    conn.execute("""
+                        INSERT INTO purchases (id, invoice_number, supplier_name, total_amount, paid_amount, payment_method, status, is_synced, cloud_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """, (
+                        new_id, inv_num, pur.get("supplier_name", "مورد عام"), float(pur.get("total_amount", 0)),
+                        float(pur.get("paid_amount", 0)), pur.get("payment_method", "نقدي"), pur.get("status", "مكتملة"),
+                        c_id, pur.get("date") or pur.get("created_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ))
+                    synced_count += 1
+            conn.commit()
+            return synced_count
 
     def save_expense(self, exp_type_or_cat, amount, description="", category=None, payment_method="كاش", is_synced=0, cloud_id=None, created_at=None):
         with self.get_connection() as conn:
@@ -727,7 +929,12 @@ class LocalDatabase:
         with self.get_connection() as conn:
             invoices = [dict(r) for r in conn.execute("SELECT * FROM invoices WHERE is_synced = 0").fetchall()]
             for inv in invoices:
-                items = [dict(r) for r in conn.execute("SELECT * FROM invoice_items WHERE invoice_id = ?", (inv["id"],)).fetchall()]
+                items = [dict(r) for r in conn.execute("""
+                    SELECT ii.*, p.piece_barcode as barcode, p.scale_code, COALESCE(p.name, ii.product_name) as clean_name
+                    FROM invoice_items ii
+                    LEFT JOIN products p ON ii.product_id = p.id
+                    WHERE ii.invoice_id = ?
+                """, (inv["id"],)).fetchall()]
                 inv["items"] = items
             return invoices
 

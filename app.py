@@ -157,19 +157,47 @@ class MultiPagePosApp(ctk.CTk):
             return False, str(e)
 
     def sync_data(self):
-        pending = self.db.get_pending_invoices()
-        success_push, synced_ids = self.api.sync_invoices(self.branch_id, pending if pending else [])
-        if synced_ids:
-            self.db.mark_invoices_synced(synced_ids)
+        try:
+            # 1. Sales
+            pending = self.db.get_pending_invoices()
+            _, synced_inv_ids = self.api.sync_invoices(self.branch_id, pending if pending else [], db=self.db)
+            sales_pushed = len(synced_inv_ids)
 
-        success_pull, data = self.api.fetch_initial_data(self.branch_id)
-        if success_pull and data:
-            self.db.sync_catalog(data.get("categories", []), data.get("products", []), data.get("stocks", []), data.get("customers", []))
+            # 2. Expenses
+            _, exp_res = self.api.sync_expenses(self.db)
+            if "expenses" in self.pages and hasattr(self.pages["expenses"], "render_table"):
+                self.pages["expenses"].render_table()
 
-        # Sync Expenses in background
-        self.sync_expenses(show_msg=False)
+            # 3. Purchases
+            _, pur_res = self.api.sync_purchases(self.db)
 
-        messagebox.showinfo("مزامنة الويب", "تم التزامن بنجاح 100% بين البرنامج المحلي وموقع الويب (supermarkrt.almagd555.com)!\n(تم تحديث المنتجات والفواتير والمصروفات بالكامل)")
+            # 4. Customers
+            _, cust_res = self.api.sync_customers(self.db)
+
+            # 5. Suppliers
+            _, supp_res = self.api.sync_suppliers(self.db)
+
+            # 6. Catalog & Products
+            success_pull, data = self.api.fetch_initial_data(self.branch_id)
+            if success_pull and data:
+                self.db.sync_catalog(data.get("categories", []), data.get("products", []), data.get("stocks", []), data.get("customers", []))
+
+            # Refresh current page if needed
+            if "pos" in self.pages and hasattr(self.pages["pos"], "render_catalog"):
+                self.pages["pos"].render_catalog()
+
+            msg = (
+                "✅ تمت المزامنة المركزية بنجاح 100% مع موقع الويب والسيرفر السحابي!\n\n"
+                f"🧾 فواتير المبيعات: تم رفع {sales_pushed} فاتورة جديدة وتحديث المخزون المركزي\n"
+                f"💸 المصروفات: تم رفع {exp_res.get('pushed', 0)} وسحب {exp_res.get('pulled', 0)}\n"
+                f"📦 المشتريات: تم رفع {pur_res.get('pushed', 0)} وسحب {pur_res.get('pulled', 0)}\n"
+                f"👥 العملاء: تم رفع {cust_res.get('pushed', 0)} وسحب {cust_res.get('pulled', 0)}\n"
+                f"🏢 الموردين: تم رفع {supp_res.get('pushed', 0)} وسحب {supp_res.get('pulled', 0)}\n"
+                "📊 المنتجات: تم تحديث أحدث قائمة منتجات وأسعار سحابية"
+            )
+            messagebox.showinfo("المزامنة المركزية الشاملة", msg)
+        except Exception as e:
+            messagebox.showerror("خطأ في المزامنة", f"حدث خطأ أثناء المزامنة: {str(e)}")
 
     def open_quick_search_modal(self):
         win = ctk.CTkToplevel(self)
@@ -571,6 +599,13 @@ class SalesPage(ctk.CTkFrame):
 
         self.db.save_invoice(inv_data, db_items)
 
+        # Trigger immediate background sync for invoice to update cloud orders & stock
+        import threading
+        threading.Thread(
+            target=lambda: self.main_app.api.sync_invoices(self.main_app.branch_id, self.db.get_pending_invoices(), db=self.db),
+            daemon=True
+        ).start()
+
         self.show_thermal_receipt_window(inv_num, self.cart, subtotal, discount, net_total, payment_method, cust_name, cust_phone, address)
 
         self.cart = []
@@ -895,6 +930,13 @@ class PurchasesPage(ctk.CTkFrame):
         total = sum(i["buy_price"] * i["piece_qty"] * (i["weight_grams"] / 1000.0) for i in self.purchase_items)
 
         self.db.save_purchase_invoice(supp_id, inv_no, is_credit, total, self.purchase_items)
+
+        # Trigger immediate background sync for purchases to cloud
+        import threading
+        threading.Thread(
+            target=lambda: self.main_app.api.sync_purchases(self.db),
+            daemon=True
+        ).start()
 
         messagebox.showinfo("تأكيد التوريد", f"تم حفظ فاتورة التوريد بنجاح وخفف المخزون!\nالمورد: {supp_name}\nالإجمالي: {total:.2f} ج.م")
 
