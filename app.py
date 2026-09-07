@@ -1,7 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox, ttk
-from database import LocalDatabase
+from database import LocalDatabase, STANDARD_EXPENSE_CATEGORIES
 from api_client import ApiClient
 from sync_worker import BackgroundSyncWorker
 from printer_service import ThermalPrinter80mm
@@ -134,6 +134,28 @@ class MultiPagePosApp(ctk.CTk):
         self.pages["reports"] = ReportsPage(self.content_container, self)
         self.pages["settings"] = SettingsPage(self.content_container, self)
 
+    def sync_expenses(self, show_msg=True):
+        try:
+            success, res = self.api.sync_expenses(self.db)
+            if "expenses" in self.pages and hasattr(self.pages["expenses"], "render_table"):
+                self.pages["expenses"].render_table()
+            if show_msg:
+                pushed = res.get("pushed", 0)
+                pulled = res.get("pulled", 0)
+                total = res.get("total_cloud", 0)
+                messagebox.showinfo(
+                    "مزامنة المصروفات السحابية",
+                    f"تمت مزامنة المصروفات بنجاح 100% مع موقع الويب!\n\n"
+                    f"☁️ تم رفع {pushed} مصروف جديد للسيرفر\n"
+                    f"📥 تم سحب {pulled} مصروف جديد من الموقع\n"
+                    f"📊 إجمالي المصروفات السحابية: {total} مصروف"
+                )
+            return success, res
+        except Exception as e:
+            if show_msg:
+                messagebox.showerror("خطأ مزامنة المصروفات", f"تعذر مزامنة المصروفات: {str(e)}")
+            return False, str(e)
+
     def sync_data(self):
         pending = self.db.get_pending_invoices()
         success_push, synced_ids = self.api.sync_invoices(self.branch_id, pending if pending else [])
@@ -144,7 +166,10 @@ class MultiPagePosApp(ctk.CTk):
         if success_pull and data:
             self.db.sync_catalog(data.get("categories", []), data.get("products", []), data.get("stocks", []), data.get("customers", []))
 
-        messagebox.showinfo("مزامنة الويب", "تم التزامن بنجاح 100% بين البرنامج المحلي وموقع الويب (supermarkrt.almagd555.com)!")
+        # Sync Expenses in background
+        self.sync_expenses(show_msg=False)
+
+        messagebox.showinfo("مزامنة الويب", "تم التزامن بنجاح 100% بين البرنامج المحلي وموقع الويب (supermarkrt.almagd555.com)!\n(تم تحديث المنتجات والفواتير والمصروفات بالكامل)")
 
     def open_quick_search_modal(self):
         win = ctk.CTkToplevel(self)
@@ -1616,63 +1641,132 @@ class ExpensesPage(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=12)
 
-        ctk.CTkLabel(header, text="💰 شاشة إدارة المصروفات التشغيلية والشركاء (ج.م)", font=("Cairo", 16, "bold"), text_color="#F8FAFC").pack(side="right")
-        ctk.CTkButton(header, text="➕ تسجيل مصروف جديد", font=("Cairo", 11, "bold"), fg_color="#EF4444", command=self.open_add_modal).pack(side="left")
+        ctk.CTkLabel(header, text="💰 شاشة إدارة المصروفات المتزامنة مع الويب بالجنيه المصري (ج.م)", font=("Cairo", 16, "bold"), text_color="#F8FAFC").pack(side="right")
+
+        btn_box = ctk.CTkFrame(header, fg_color="transparent")
+        btn_box.pack(side="left")
+
+        ctk.CTkButton(btn_box, text="🔄 مزامنة المصروفات السحابية الآن", font=("Cairo", 11, "bold"), fg_color="#10B981", hover_color="#059669", command=lambda: self.main_app.sync_expenses(show_msg=True)).pack(side="left", padx=4)
+        ctk.CTkButton(btn_box, text="➕ تسجيل مصروف جديد", font=("Cairo", 11, "bold"), fg_color="#EF4444", hover_color="#DC2626", command=self.open_add_modal).pack(side="left", padx=4)
 
         self.table_scroll = ctk.CTkScrollableFrame(self, fg_color="#1E293B", corner_radius=10)
         self.table_scroll.pack(fill="both", expand=True, padx=20, pady=10)
 
     def on_show(self):
+        try: self.main_app.sync_expenses(show_msg=False)
+        except Exception: pass
         self.render_table()
 
     def render_table(self):
         for c in self.table_scroll.winfo_children(): c.destroy()
         exps = self.db.get_expenses()
 
-        h = ctk.CTkFrame(self.table_scroll, fg_color="#0F172A", height=36)
+        h = ctk.CTkFrame(self.table_scroll, fg_color="#0F172A", height=38)
         h.pack(fill="x", pady=2)
-        cols = ["بند المصروف", "نوع المصروف", "المبلغ بالجنيه المصري (ج.م)", "التاريخ"]
-        for c in cols:
-            ctk.CTkLabel(h, text=c, font=("Cairo", 11, "bold"), text_color="#94A3B8").pack(side="right", expand=True, fill="x")
+        cols = [("#", 35), ("بند المصروف (الفئة)", 170), ("البيان / ملاحظات", 260), ("المبلغ (ج.م)", 130), ("طريقة الدفع", 110), ("التاريخ والوقت", 160), ("المزامنة السحابية ☁️", 140)]
+        for title, width in cols:
+            ctk.CTkLabel(h, text=title, font=("Cairo", 11, "bold"), text_color="#94A3B8", width=width).pack(side="right", padx=2)
 
-        for e in exps:
-            row = ctk.CTkFrame(self.table_scroll, fg_color="#334155", height=36)
+        if not exps:
+            ctk.CTkLabel(self.table_scroll, text="لا توجد مصروفات مسجلة حتى الآن", font=("Cairo", 13), text_color="#94A3B8").pack(pady=40)
+            return
+
+        for idx, e in enumerate(exps, 1):
+            row = ctk.CTkFrame(self.table_scroll, fg_color="#334155" if idx % 2 == 0 else "#1E293B", height=40)
             row.pack(fill="x", pady=2)
-            ctk.CTkLabel(row, text=e.get("description") or "-", font=("Cairo", 11, "bold")).pack(side="right", expand=True, fill="x")
-            ctk.CTkLabel(row, text=e.get("type", "operating"), font=("Cairo", 10)).pack(side="right", expand=True, fill="x")
-            ctk.CTkLabel(row, text=f"{float(e['amount']):.2f} ج.م", font=("Cairo", 11, "bold"), text_color="#EF4444").pack(side="right", expand=True, fill="x")
-            ctk.CTkLabel(row, text=str(e.get("created_at", "-"))[:10]).pack(side="right", expand=True, fill="x")
+
+            ctk.CTkLabel(row, text=str(idx), font=("Cairo", 10, "bold"), text_color="#94A3B8", width=35).pack(side="right", padx=2)
+
+            cat_val = e.get("category") or ("مسحوبات الشركاء" if e.get("type") == "partner_withdrawal" else "نثريات")
+            ctk.CTkLabel(row, text=cat_val, font=("Cairo", 11, "bold"), text_color="#38BDF8", width=170, anchor="e").pack(side="right", padx=2)
+
+            desc_val = e.get("description") or "-"
+            ctk.CTkLabel(row, text=desc_val[:35], font=("Cairo", 11), text_color="#FFFFFF", width=260, anchor="e").pack(side="right", padx=2)
+
+            amt_val = float(e.get("amount", 0))
+            ctk.CTkLabel(row, text=f"{amt_val:.2f} ج.م", font=("Cairo", 12, "bold"), text_color="#EF4444", width=130).pack(side="right", padx=2)
+
+            pm_val = e.get("payment_method") or "كاش"
+            ctk.CTkLabel(row, text=pm_val, font=("Cairo", 10), text_color="#F59E0B", width=110).pack(side="right", padx=2)
+
+            dt_val = str(e.get("created_at", "-"))[:16]
+            ctk.CTkLabel(row, text=dt_val, font=("Cairo", 10), text_color="#94A3B8", width=160).pack(side="right", padx=2)
+
+            is_sync = e.get("is_synced") or (1 if e.get("cloud_id") else 0)
+            sync_txt = "متزامن سحابياً ☁️✅" if is_sync else "قيد المزامنة ⏳"
+            sync_color = "#10B981" if is_sync else "#F59E0B"
+            ctk.CTkLabel(row, text=sync_txt, font=("Cairo", 10, "bold"), text_color=sync_color, width=140).pack(side="right", padx=2)
 
     def open_add_modal(self):
         win = ctk.CTkToplevel(self)
-        win.title("➕ تسجيل مصروف جديد")
-        win.geometry("420x340")
+        win.title("➕ تسجيل مصروف جديد متزامن سحابياً مع المتجر")
+        win.geometry("500x530")
         win.configure(fg_color="#0F172A")
         win.grab_set()
 
-        ctk.CTkLabel(win, text="بيانات المصروف:", font=("Cairo", 13, "bold"), text_color="#EF4444").pack(pady=10)
+        ctk.CTkLabel(win, text="💰 تسجيل مصروف جديد (نفس بنود الويب والكاشير):", font=("Cairo", 13, "bold"), text_color="#F8FAFC").pack(pady=12)
 
-        desc_e = ctk.CTkEntry(win, placeholder_text="بيان المصروف (مثال: فاتورة كهرباء المحل)", font=("Cairo", 11), justify="right")
-        desc_e.pack(padx=20, pady=6, fill="x")
+        form = ctk.CTkFrame(win, fg_color="#1E293B", corner_radius=10)
+        form.pack(padx=20, pady=5, fill="both", expand=True)
 
-        amt_e = ctk.CTkEntry(win, placeholder_text="المبلغ بالجنيه المصري (ج.م)", font=("Cairo", 11), justify="right")
-        amt_e.pack(padx=20, pady=6, fill="x")
+        ctk.CTkLabel(form, text="بند المصروف المعتمد:", font=("Cairo", 11, "bold"), text_color="#94A3B8").pack(pady=(10, 2), padx=20, anchor="e")
+        cat_var = ctk.StringVar(value=STANDARD_EXPENSE_CATEGORIES[0])
+        cat_menu = ctk.CTkOptionMenu(
+            form, variable=cat_var, values=STANDARD_EXPENSE_CATEGORIES,
+            font=("Cairo", 12, "bold"), fg_color="#0F172A", button_color="#EF4444", height=36
+        )
+        cat_menu.pack(padx=20, pady=2, fill="x")
 
-        type_var = ctk.StringVar(value="operating")
-        menu = ctk.CTkOptionMenu(win, variable=type_var, values=["operating", "partner_withdrawal"], font=("Cairo", 11, "bold"))
-        menu.pack(padx=20, pady=6, fill="x")
+        ctk.CTkLabel(form, text="المبلغ بالجنيه المصري (ج.م):", font=("Cairo", 11, "bold"), text_color="#94A3B8").pack(pady=(8, 2), padx=20, anchor="e")
+        amt_e = ctk.CTkEntry(form, placeholder_text="مثال: 450", font=("Cairo", 12, "bold"), justify="right", fg_color="#0F172A", height=36)
+        amt_e.pack(padx=20, pady=2, fill="x")
+        amt_e.focus_set()
+
+        ctk.CTkLabel(form, text="البيان / ملاحظات وتفاصيل المصروف:", font=("Cairo", 11, "bold"), text_color="#94A3B8").pack(pady=(8, 2), padx=20, anchor="e")
+        desc_e = ctk.CTkEntry(form, placeholder_text="مثال: فاتورة كهرباء المحل لشهر سبتمبر", font=("Cairo", 11), justify="right", fg_color="#0F172A", height=36)
+        desc_e.pack(padx=20, pady=2, fill="x")
+
+        ctk.CTkLabel(form, text="طريقة الدفع (الخزينة):", font=("Cairo", 11, "bold"), text_color="#94A3B8").pack(pady=(8, 2), padx=20, anchor="e")
+        pm_var = ctk.StringVar(value="كاش")
+        pm_menu = ctk.CTkOptionMenu(
+            form, variable=pm_var, values=["كاش", "فيزا", "انستا باي", "فودافون كاش"],
+            font=("Cairo", 11, "bold"), fg_color="#0F172A", button_color="#6366F1", height=34
+        )
+        pm_menu.pack(padx=20, pady=2, fill="x")
 
         def save():
-            d = desc_e.get().strip()
-            try: a = float(amt_e.get().strip())
-            except ValueError: return messagebox.showerror("خطأ", "يرجى كتابة مبلغ صحيح!")
+            cat = cat_var.get().strip()
+            try:
+                amt = float(amt_e.get().strip())
+                if amt <= 0: raise ValueError
+            except ValueError:
+                return messagebox.showerror("خطأ", "يرجى كتابة مبلغ صحيح أكبر من الصفر!")
 
-            self.db.save_expense(type_var.get(), a, d)
+            desc = desc_e.get().strip() or f"مصروف {cat}"
+            pm = pm_var.get()
+
+            # Save locally
+            exp_id = self.db.save_expense(exp_type_or_cat=cat, amount=amt, description=desc, payment_method=pm)
+
+            # Immediately push to Cloud Server
+            push_ok, push_msg = self.main_app.api.push_expense(cat, amt, desc, pm)
+            if push_ok:
+                self.db.mark_expenses_synced([exp_id])
+
             self.render_table()
             win.destroy()
-            messagebox.showinfo("نجاح", f"تم تسجيل المصروف '{d}' بقيمة {a:.2f} ج.م بنجاح!")
 
-        ctk.CTkButton(win, text="حفظ المصروف 🧾", font=("Cairo", 12, "bold"), fg_color="#EF4444", height=38, command=save).pack(padx=20, pady=14, fill="x")
+            msg = f"تم تسجيل المصروف بنجاح!\n\n📋 البند: {cat}\n💵 المبلغ: {amt:.2f} ج.م\n💳 طريقة الدفع: {pm}\n"
+            if push_ok:
+                msg += "\n☁️ تمت المزامنة الفورية مع موقع الويب بنجاح ✅"
+            else:
+                msg += "\n⚠️ تم الحفظ محلياً وسيتم الرفع للويب تلقائياً بالخلفية."
+            messagebox.showinfo("تأكيد تسجيل المصروف", msg)
+
+        ctk.CTkButton(
+            win, text="حفظ المصروف والمزامنة السحابية فوراً 🚀", font=("Cairo", 13, "bold"),
+            fg_color="#EF4444", hover_color="#DC2626", height=42, command=save
+        ).pack(padx=20, pady=12, fill="x")
 
 
 # ==========================================

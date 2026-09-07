@@ -3,6 +3,19 @@ import os
 import uuid
 import datetime
 
+STANDARD_EXPENSE_CATEGORIES = [
+    "نثريات",
+    "إيجار",
+    "كهرباء ومياه",
+    "صيانة ومعدات",
+    "أكياس ومطبوعات",
+    "وجبات وبوفيه",
+    "نقل وشحن",
+    "رواتب وعمالة",
+    "مسحوبات الشركاء",
+    "نظافة ومستهلكات"
+]
+
 class LocalDatabase:
     def __init__(self, db_path="pos_local.db"):
         self.db_path = db_path
@@ -179,12 +192,28 @@ class LocalDatabase:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS expenses (
                     id TEXT PRIMARY KEY,
-                    type TEXT NOT NULL,
+                    type TEXT NOT NULL DEFAULT 'operating',
+                    category TEXT DEFAULT 'نثريات',
                     amount REAL DEFAULT 0.0,
                     description TEXT,
+                    payment_method TEXT DEFAULT 'كاش',
+                    is_synced INTEGER DEFAULT 0,
+                    cloud_id TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            try: cursor.execute("ALTER TABLE expenses ADD COLUMN category TEXT DEFAULT 'نثريات'")
+            except sqlite3.OperationalError: pass
+
+            try: cursor.execute("ALTER TABLE expenses ADD COLUMN payment_method TEXT DEFAULT 'كاش'")
+            except sqlite3.OperationalError: pass
+
+            try: cursor.execute("ALTER TABLE expenses ADD COLUMN is_synced INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
+
+            try: cursor.execute("ALTER TABLE expenses ADD COLUMN cloud_id TEXT DEFAULT NULL")
+            except sqlite3.OperationalError: pass
 
             # Shifts & Drawer Table (For X & Z Reports)
             cursor.execute("""
@@ -590,18 +619,80 @@ class LocalDatabase:
 
             conn.commit()
 
-    def save_expense(self, exp_type, amount, description=""):
+    def save_expense(self, exp_type_or_cat, amount, description="", category=None, payment_method="كاش", is_synced=0, cloud_id=None, created_at=None):
         with self.get_connection() as conn:
-            conn.execute(
-                "INSERT INTO expenses (id, type, amount, description) VALUES (?, ?, ?, ?)",
-                (str(uuid.uuid4()), exp_type, float(amount), description)
-            )
+            # Determine category & type
+            if category is not None:
+                final_cat = category
+                final_type = exp_type_or_cat
+            elif exp_type_or_cat in ("operating", "partner_withdrawal"):
+                final_type = exp_type_or_cat
+                final_cat = "مسحوبات الشركاء" if exp_type_or_cat == "partner_withdrawal" else "نثريات"
+            else:
+                final_cat = exp_type_or_cat
+                final_type = "partner_withdrawal" if "مسحوبات" in final_cat or "شركاء" in final_cat else "operating"
+
+            exp_id = str(uuid.uuid4())
+            if created_at:
+                conn.execute(
+                    "INSERT INTO expenses (id, type, category, amount, description, payment_method, is_synced, cloud_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (exp_id, final_type, final_cat, float(amount), description, payment_method, is_synced, cloud_id, created_at)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO expenses (id, type, category, amount, description, payment_method, is_synced, cloud_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (exp_id, final_type, final_cat, float(amount), description, payment_method, is_synced, cloud_id)
+                )
             conn.commit()
+            return exp_id
 
     def get_expenses(self):
         with self.get_connection() as conn:
             rows = conn.execute("SELECT * FROM expenses ORDER BY created_at DESC").fetchall()
             return [dict(r) for r in rows]
+
+    def get_unsynced_expenses(self):
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM expenses WHERE is_synced = 0").fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_expenses_synced(self, expense_ids):
+        with self.get_connection() as conn:
+            for e_id in expense_ids:
+                conn.execute("UPDATE expenses SET is_synced = 1 WHERE id = ?", (e_id,))
+            conn.commit()
+
+    def sync_cloud_expenses(self, cloud_expenses):
+        with self.get_connection() as conn:
+            synced_count = 0
+            for exp in cloud_expenses:
+                c_id = str(exp.get("id", ""))
+                c_cat = exp.get("category", "نثريات")
+                c_amt = float(exp.get("amount", 0))
+                c_note = exp.get("note", "")
+                c_date = exp.get("date") or exp.get("created_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                c_pm = exp.get("payment_method", "كاش")
+
+                # Check if already exists by cloud_id or by exact match (amount, category, date)
+                existing = None
+                if c_id:
+                    existing = conn.execute("SELECT id FROM expenses WHERE cloud_id = ?", (c_id,)).fetchone()
+                if not existing:
+                    existing = conn.execute(
+                        "SELECT id FROM expenses WHERE amount = ? AND category = ? AND (description = ? OR created_at LIKE ?)",
+                        (c_amt, c_cat, c_note, f"{c_date[:10]}%")
+                    ).fetchone()
+
+                if not existing:
+                    exp_type = "partner_withdrawal" if "مسحوبات" in c_cat or "شركاء" in c_cat else "operating"
+                    new_id = str(uuid.uuid4())
+                    conn.execute(
+                        "INSERT INTO expenses (id, type, category, amount, description, payment_method, is_synced, cloud_id, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                        (new_id, exp_type, c_cat, c_amt, c_note, c_pm, c_id, c_date)
+                    )
+                    synced_count += 1
+            conn.commit()
+            return synced_count
 
     def get_net_profit_summary(self):
         with self.get_connection() as conn:

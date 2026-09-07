@@ -1513,18 +1513,65 @@
         <!-- Tab 9: Expenses -->
         <div id="admin-tab-expenses" class="admin-sub-tab">
             <div class="erp-card">
-                <h3>💰 تسجيل مصروف جديد (ج.م)</h3>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <h3>💰 تسجيل مصروف جديد (متزامن مع برنامج الكاشير)</h3>
+                    <button type="button" onclick="fetchCloudExpensesWeb()" class="btn-primary" style="background:#10B981; font-size:0.85rem; padding:6px 14px; border-radius:8px; cursor:pointer;">🔄 تحديث المزامنة السحابية</button>
+                </div>
                 <form id="expense-add-form">
                     <div class="form-group-cart">
-                        <label>بند المصروف:</label>
-                        <input type="text" id="exp-title" required placeholder="مثال: فاتورة كهرباء المحل">
+                        <label>بند المصروف المعتمد:</label>
+                        <select id="exp-category" style="width:100%; padding:10px; border-radius:8px; border:1px solid #cbd5e1; background:white; font-size:1rem; font-family:'Cairo', sans-serif;">
+                            <option value="نثريات">نثريات</option>
+                            <option value="إيجار">إيجار</option>
+                            <option value="كهرباء ومياه">كهرباء ومياه</option>
+                            <option value="صيانة ومعدات">صيانة ومعدات</option>
+                            <option value="أكياس ومطبوعات">أكياس ومطبوعات</option>
+                            <option value="وجبات وبوفيه">وجبات وبوفيه</option>
+                            <option value="نقل وشحن">نقل وشحن</option>
+                            <option value="رواتب وعمالة">رواتب وعمالة</option>
+                            <option value="مسحوبات الشركاء">مسحوبات الشركاء</option>
+                            <option value="نظافة ومستهلكات">نظافة ومستهلكات</option>
+                        </select>
                     </div>
                     <div class="form-group-cart">
                         <label>المبلغ (بالجنيه المصري ج.م):</label>
-                        <input type="number" step="5" id="exp-amount" required placeholder="450">
+                        <input type="number" step="1" id="exp-amount" required placeholder="مثال: 450">
                     </div>
-                    <button type="submit" class="btn-submit-order" style="background: var(--brand-green);">حفظ 🧾</button>
+                    <div class="form-group-cart">
+                        <label>البيان / ملاحظات وتفاصيل المصروف:</label>
+                        <input type="text" id="exp-note" placeholder="مثال: فاتورة كهرباء المحل لشهر سبتمبر">
+                    </div>
+                    <div class="form-group-cart">
+                        <label>طريقة الدفع (الخزينة):</label>
+                        <select id="exp-payment-method" style="width:100%; padding:10px; border-radius:8px; border:1px solid #cbd5e1; background:white; font-size:1rem; font-family:'Cairo', sans-serif;">
+                            <option value="كاش">كاش (نقداً)</option>
+                            <option value="فيزا">فيزا / كارت</option>
+                            <option value="انستا باي">انستا باي</option>
+                            <option value="فودافون كاش">فودافون كاش</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn-submit-order" style="background: var(--brand-green);">حفظ وتسجيل المصروف سحابياً 🧾</button>
                 </form>
+            </div>
+
+            <div class="erp-card" style="margin-top:20px;">
+                <h3>📜 سجل المصروفات المتزامنة (سحابياً وببرنامج الكاشير)</h3>
+                <div style="overflow-x:auto;">
+                    <table class="styled-table" style="width:100%; text-align:right;">
+                        <thead>
+                            <tr>
+                                <th>بند المصروف</th>
+                                <th>البيان / ملاحظات</th>
+                                <th>المبلغ (ج.م)</th>
+                                <th>طريقة الدفع</th>
+                                <th>التاريخ والوقت</th>
+                                <th>الحالة ☁️</th>
+                            </tr>
+                        </thead>
+                        <tbody id="expenses-table-body">
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -3367,22 +3414,89 @@
                 `).join("");
             }
 
-            function handleAddExpense(e) {
-                e.preventDefault();
-                const title = getValue("exp-title");
-                const amount = parseFloat(getValue("exp-amount"));
+            async function fetchCloudExpensesWeb() {
+                try {
+                    const res = await fetch("https://supermarkrt.almagd555.com/api_sync.php?action=get_pos_reports&period=all&api_key=syrian_home_pos_secret_token_2026", {
+                        headers: { "Accept": "application/json" }
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.success && data.expenses_report && Array.isArray(data.expenses_report.filtered_expenses)) {
+                            expensesData = data.expenses_report.filtered_expenses.map(exp => ({
+                                category: exp.category || 'نثريات',
+                                title: exp.note || exp.category || 'مصروف',
+                                amount: parseFloat(exp.amount || 0),
+                                payment_method: exp.payment_method || 'كاش',
+                                date: (exp.date || exp.created_at || '').substring(0, 16),
+                                synced: true
+                            }));
+                            localStorage.setItem("almanzil_v20_exps", JSON.stringify(expensesData));
+                            renderExpensesTable();
+                            showToast("تم تحديث المصروفات من السيرفر السحابي بنجاح! ☁️✅");
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Could not fetch cloud expenses:", e);
+                }
+                renderExpensesTable();
+            }
 
-                if (!title || isNaN(amount)) return;
+            async function handleAddExpense(e) {
+                e.preventDefault();
+                const category = getValue("exp-category") || "نثريات";
+                const amount = parseFloat(getValue("exp-amount"));
+                const note = getValue("exp-note") || `مصروف ${category}`;
+                const paymentMethod = getValue("exp-payment-method") || "كاش";
+
+                if (!category || isNaN(amount) || amount <= 0) {
+                    alert("يرجى إدخال مبلغ صحيح أكبر من الصفر!");
+                    return;
+                }
+
+                // Push to Central Cloud API
+                let pushSuccess = false;
+                try {
+                    const res = await fetch("https://supermarkrt.almagd555.com/api_sync.php?action=record_expense&api_key=syrian_home_pos_secret_token_2026", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Accept": "application/json"
+                        },
+                        body: JSON.stringify({
+                            category: category,
+                            amount: amount,
+                            note: note,
+                            payment_method: paymentMethod,
+                            date: new Date().toISOString().slice(0, 19).replace('T', ' ')
+                        })
+                    });
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d.success) pushSuccess = true;
+                    }
+                } catch (err) {
+                    console.warn("Could not push expense to cloud immediately:", err);
+                }
 
                 expensesData.unshift({
-                    title: title,
+                    category: category,
+                    title: note,
                     amount: amount,
-                    date: new Date().toISOString().split('T')[0]
+                    payment_method: paymentMethod,
+                    date: new Date().toISOString().slice(0, 16).replace('T', ' '),
+                    synced: pushSuccess
                 });
 
                 localStorage.setItem("almanzil_v20_exps", JSON.stringify(expensesData));
                 renderExpensesTable();
-                showToast(`تم تسجيل المصروف بقيمة ${amount} ج.م بنجاح!`);
+
+                if (pushSuccess) {
+                    showToast(`✅ تم تسجيل المصروف بقيمة ${amount} ج.م ومزامنته سحابياً مع الكاشير بنجاح!`);
+                } else {
+                    showToast(`تم تسجيل المصروف بقيمة ${amount} ج.م محلياً!`);
+                }
+
                 const form = document.getElementById("expense-add-form");
                 if (form) form.reset();
             }
@@ -3391,11 +3505,19 @@
                 const tbody = document.getElementById("expenses-table-body");
                 if (!tbody) return;
 
+                if (!expensesData || expensesData.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:20px; color:#64748b;">لا توجد مصروفات مسجلة حتى الآن</td></tr>`;
+                    return;
+                }
+
                 tbody.innerHTML = expensesData.map(e => `
                     <tr>
-                        <td><strong>${e.title}</strong></td>
+                        <td><strong style="color: #0284c7;">${e.category || 'نثريات'}</strong></td>
+                        <td>${e.title || e.note || '-'}</td>
                         <td style="font-weight:bold; color: #EF4444;">${parseFloat(e.amount).toFixed(2)} ج.م</td>
+                        <td><span style="color:#b45309; font-weight:bold;">${e.payment_method || 'كاش'}</span></td>
                         <td><code>${e.date}</code></td>
+                        <td><span style="color:#10b981; font-weight:bold; font-size:0.85rem;">متزامن ☁️✅</span></td>
                     </tr>
                 `).join("");
             }

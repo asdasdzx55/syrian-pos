@@ -4,7 +4,7 @@ from database import LocalDatabase
 from api_client import ApiClient
 
 class BackgroundSyncWorker:
-    def __init__(self, db_path="pos_local.db", base_url="http://127.0.0.1:8000", interval_seconds=20):
+    def __init__(self, db_path="pos_local.db", base_url="https://supermarkrt.almagd555.com", interval_seconds=20):
         self.db = LocalDatabase(db_path)
         self.api = ApiClient(base_url)
         self.interval = interval_seconds
@@ -42,6 +42,14 @@ class BackgroundSyncWorker:
                 self.db.sync_catalog(categories, products, stocks, customers)
                 print("[Sync Worker] Successfully pulled central catalog & stock updates.")
 
+        # 3. Synchronize Expenses Bi-Directionally (Local POS <-> Cloud Web)
+        try:
+            exp_success, exp_res = self.api.sync_expenses(self.db)
+            if exp_success and (exp_res.get("pushed", 0) > 0 or exp_res.get("pulled", 0) > 0):
+                print(f"[Sync Worker] Expenses Synced: Pushed {exp_res.get('pushed')}, Pulled {exp_res.get('pulled')}")
+        except Exception as e:
+            print(f"[Sync Worker] Expense sync note: {e}")
+
     def _run_loop(self):
         while self.running:
             try:
@@ -57,6 +65,9 @@ if __name__ == "__main__":
     try:
         while True:
             time.sleep(1)
+            # Run manual test
+            worker.sync_now()
+            break
     except KeyboardInterrupt:
         worker.stop()
         print("Sync Worker stopped.")
